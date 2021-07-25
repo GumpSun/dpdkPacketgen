@@ -1,0 +1,60 @@
+rte_eth_rx_queue_setup：
+1.网卡接收队列设置，主要是为网卡开辟接收队列空间，也就是一级指针。
+2.rte_eth_dev_configure接口只是开辟一个二级指针空间，这里是为网卡接收队列开辟一级指针空间。
+3.来看下这个接口的实现，如果是e1000网卡，则内部会调用pmd用户态驱动提供的接口 eth_igb_rx_queue_setup
+
+int rte_eth_rx_queue_setup(uint8_t port_id, uint16_t rx_queue_id, uint16_t nb_rx_desc, 
+						   unsigned int socket_id, const struct rte_eth_rxconf *rx_conf,struct rte_mempool *mp)
+{
+	//设置网卡接收队列eth_igb_rx_queue_setup
+	ret = (*dev->dev_ops->rx_queue_setup)(dev, rx_queue_id, nb_rx_desc, socket_id, rx_conf, mp);
+}
+
+int eth_igb_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,  uint16_t nb_desc,
+							 unsigned int socket_id, const struct rte_eth_rxconf *rx_conf,struct rte_mempool *mp)
+{
+	//开辟一个接收队列空间
+	rxq = rte_zmalloc("ethdev RX queue", sizeof(struct igb_rx_queue), RTE_CACHE_LINE_SIZE);
+	rxq->mb_pool = mp;
+	rxq->nb_rx_desc = nb_desc;
+	rxq->queue_id = queue_idx;]
+	//保存接收队列
+	dev->data->rx_queues[queue_idx] = rxq;
+}
+
+//接收描述符
+union e1000_adv_rx_desc 
+{
+	struct
+	{
+		__le64 pkt_addr; 				/* mbuf的物理地址，Packet buffer address */
+		__le64 hdr_addr; 				/* Header buffer address */
+	} read;
+	struct 
+	{
+		struct 
+		{
+			__le32 status_error; 		/* 状态位，ext status/error */
+			__le16 length; 				/* 报文长度，Packet length */
+			__le16 vlan; 				/* vlan id;VLAN tag */
+		} upper;
+	} wb;  			
+};
+
+int eth_igb_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,  uint16_t nb_desc,
+							 unsigned int socket_id, const struct rte_eth_rxconf *rx_conf,struct rte_mempool *mp)
+{
+	//开辟硬件接收空间，也就是接收描述符空间
+	size = sizeof(union e1000_adv_rx_desc) * IGB_MAX_RING_DESC;
+	rz = ring_dma_zone_reserve(dev, "rx_ring", queue_idx, size, socket_id);
+	//设置硬件空间的物理地址
+	rxq->rx_ring_phys_addr = (uint64_t) rz->phys_addr;
+	//保存硬件接收空间到接收队列中
+	rxq->rx_ring = (union e1000_adv_rx_desc *) rz->addr;
+}
+
+int eth_igb_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_idx,  uint16_t nb_desc,
+							 unsigned int socket_id, const struct rte_eth_rxconf *rx_conf,struct rte_mempool *mp)
+{
+	//开辟软件空间，保存到接收队列中
+	rxq->sw_ring = rte_zmalloc("rxq->sw_ring", sizeof(struct igb_rx_entry) * nb_desc, RTE_CACHE_LINE_SIZE);

@@ -1,0 +1,21 @@
+──rte_eal_pci_init
+   │
+   ├──初始化以全局变量pci_driver_list和pci_device_list为头的tail queue
+   │
+   └──rte_eal_pci_scan
+         │
+         └──遍历目录/sys/bus/pci/devices下的所有子目录
+               │
+               ├──parse_pci_addr_format: 从目录名称中获取PCI设备的domain、bus、devid、function信息
+               │
+               └──pci_scan_one
+                     │
+                     ├──mallocstruct rte_pci_device结构
+                     │
+                     ├──读取目录/sys/bus/pci/devices下相关文件，填充struct rte_pci_device结构字段
+                     │
+                     ├──pci_get_kernel_driver_by_path: 获取驱动名称
+                     │
+                     ├──赋值所支持的驱动(structrte_pci_device结构的kdrv字段)
+                     │
+                     └──将此struct rte_pci_device结构按序插入到全局队列pci_device_list

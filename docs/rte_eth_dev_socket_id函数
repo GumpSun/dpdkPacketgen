@@ -1,0 +1,13 @@
+rte_eth_dev_socket_id：
+
+1.返回连接的Ethernet设备的NUMA套接字。
+
+参数说明：
+port_id	Ethernet设备的端口标识符。
+
+返回：
+
+以太网设备连接到的NUMA套接字id，如果无法确定套接字，则默认为0，如果端口id值超出范围则返回-1。
+
+参考资料:
+http://doc.dpdk.org/api/rte__ethdev_8h.html

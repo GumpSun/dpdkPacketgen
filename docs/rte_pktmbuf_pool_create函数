@@ -1,0 +1,75 @@
+rte_pktmbuf_pool_create
+
+struct rte_mempool * rte_pktmbuf_pool_create(const char *name, unsigned int n, unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size, int socket_id)
+
+参数说明：
+
+1.在socket_id对应的CPU上创建内存池，一个CPU最多能申请10G，超过此限制会申请失败
+2.n表示内存值中可以设置mbuf的个数
+3.内存池为每个locre分配mbuf 对mbuf结构体中对应的内容修改 在执行对mbuf的操作（发送/接收）
+4.cache_size必须要<= CONFIG_RTE_MEMPOOL_CACHE_MAX_SIZE(512) 和 n/1.5 设置为0表示禁用缓存
+5.priv_size通常设置为0
+6.data_room_size Mbuf数据区大小 包括headroom大小和数据大小 默认设置为(2048+128)大包情况下要设置为(8192+128)
+
+函数原型：
+
+/* helper to create a mbuf pool */
+struct rte_mempool *rte_pktmbuf_pool_create(const char *name, unsigned int n,
+	unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size,
+	int socket_id)
+{
+	return rte_pktmbuf_pool_create_by_ops(name, n, cache_size, priv_size,
+			data_room_size, socket_id, NULL);
+}
+
+
+/* Helper to create a mbuf pool with given mempool ops name*/
+struct rte_mempool *rte_pktmbuf_pool_create_by_ops(const char *name, unsigned int n,
+	unsigned int cache_size, uint16_t priv_size, uint16_t data_room_size,
+	int socket_id, const char *ops_name)
+{
+	struct rte_mempool *mp;
+	struct rte_pktmbuf_pool_private mbp_priv;
+	const char *mp_ops_name = ops_name;
+	unsigned elt_size;
+	int ret;
+
+	if (RTE_ALIGN(priv_size, RTE_MBUF_PRIV_ALIGN) != priv_size) {
+		RTE_LOG(ERR, MBUF, "mbuf priv_size=%u is not aligned\n",
+			priv_size);
+		rte_errno = EINVAL;
+		return NULL;
+	}
+	elt_size = sizeof(struct rte_mbuf) + (unsigned)priv_size +
+		(unsigned)data_room_size;
+	mbp_priv.mbuf_data_room_size = data_room_size;
+	mbp_priv.mbuf_priv_size = priv_size;
+	
+	mp = rte_mempool_create_empty(name, n, elt_size, cache_size,
+		 sizeof(struct rte_pktmbuf_pool_private), socket_id, 0);
+	if (mp == NULL)
+		return NULL;
+	
+	if (mp_ops_name == NULL)
+		mp_ops_name = rte_mbuf_best_mempool_ops();
+	ret = rte_mempool_set_ops_byname(mp, mp_ops_name, NULL);
+	if (ret != 0) {
+		RTE_LOG(ERR, MBUF, "error setting mempool handler\n");
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+	rte_pktmbuf_pool_init(mp, &mbp_priv);
+	
+	ret = rte_mempool_populate_default(mp);
+	if (ret < 0) {
+		rte_mempool_free(mp);
+		rte_errno = -ret;
+		return NULL;
+	}
+	
+	rte_mempool_obj_iter(mp, rte_pktmbuf_init, NULL);
+	
+	return mp;
+
+}

@@ -1,0 +1,31 @@
+#define RTE_ETH_FOREACH_DEV(p)					\
+	for (p = rte_eth_find_next(0);				\
+	     (unsigned int)p < (unsigned int)RTE_MAX_ETHPORTS;	\
+	     p = rte_eth_find_next(p + 1))
+		 
+
+/* 从port_id开始遍历rte_eth_devices数组，找到第一个状态为RTE_ETH_DEV_ATTACHED的设备 */
+uint8_t rte_eth_find_next(uint8_t port_id)
+{
+	while (port_id < RTE_MAX_ETHPORTS &&
+	       rte_eth_devices[port_id].state != RTE_ETH_DEV_ATTACHED)
+		port_id++;
+
+	if (port_id >= RTE_MAX_ETHPORTS)
+		return RTE_MAX_ETHPORTS;
+
+	return port_id;
+}
+
+uint8_t rte_eth_dev_count(void)
+{
+	uint8_t p;
+	uint8_t count;
+
+	count = 0;
+
+	RTE_ETH_FOREACH_DEV(p)
+		count++;
+
+	return count;
+}

@@ -1,0 +1,208 @@
+rte_eth_dev_start：
+
+1.启动网卡。
+
+int rte_eth_dev_start(uint8_t port_id)
+{
+	struct rte_eth_dev *dev;
+	int diag;
+
+	/* 检查port_id是否合法 */
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port_id, -EINVAL);
+
+	/* 得到port_id对应的设备 */
+	dev = &rte_eth_devices[port_id];
+
+	/* 检查dev_start是否定义 */
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_start, -ENOTSUP);
+
+	/* 检查设备是否已启动 */
+	if (dev->data->dev_started != 0) {
+		RTE_PMD_DEBUG_TRACE("Device with port_id=%" PRIu8
+			" already started\n",
+			port_id);
+		return 0;
+	}
+
+	/* ixgbe为ixgbe_dev_start() */
+	diag = (*dev->dev_ops->dev_start)(dev);
+	if (diag == 0)
+		dev->data->dev_started = 1;
+	else
+		return diag;
+
+	/* 保存配置 */
+	rte_eth_dev_config_restore(port_id);
+
+	if (dev->data->dev_conf.intr_conf.lsc == 0) {
+		RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->link_update, -ENOTSUP);
+		(*dev->dev_ops->link_update)(dev, 0);
+	}
+	return 0;
+}
+
+static int ixgbe_dev_start(struct rte_eth_dev *dev)
+{
+	...
+	/* 为每个ixgbe_tx_queue配置网卡的TDBAL、TDBAH、TDLEN、TDH、TDT */
+	ixgbe_dev_tx_init(dev);
+	...
+	/* 为每个ixgbe_rx_queue配置网卡的RDBAL、RDBAH、RDLEN、RDH、RDT */
+	err = ixgbe_dev_rx_init(dev);
+	...
+	err = ixgbe_dev_rxtx_start(dev);
+	...
+}
+
+void __attribute__((cold)) ixgbe_dev_tx_init(struct rte_eth_dev *dev)
+{
+	...
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		txq = dev->data->tx_queues[i];
+		...
+		bus_addr = txq->tx_ring_phys_addr; /* desc数组的总线地址 */
+		/* 将desc数组的总线地址写入网卡寄存器
+		 * TDBAL（TX Descriptor Base Address Low）
+		 * TDBAH（TX Descriptor Base Address High）
+		 * TDLEN（TX Descriptor Length）
+		 * TDH（TX Descriptor Head）
+		 * TDT（TX Descriptor Tail）
+		 * #define IXGBE_TDBAL(_i)		(0x06000 + ((_i) * 0x40))
+		 * #define IXGBE_TDBAH(_i)		(0x06004 + ((_i) * 0x40))
+		 * #define IXGBE_TDLEN(_i)		(0x06008 + ((_i) * 0x40))
+		 * #define IXGBE_TDH(_i)		(0x06010 + ((_i) * 0x40))
+		 * #define IXGBE_TDT(_i)		(0x06018 + ((_i) * 0x40)) */
+		IXGBE_WRITE_REG(hw, IXGBE_TDBAL(txq->reg_idx),
+				(uint32_t)(bus_addr & 0x00000000ffffffffULL));
+		IXGBE_WRITE_REG(hw, IXGBE_TDBAH(txq->reg_idx),
+				(uint32_t)(bus_addr >> 32));
+		IXGBE_WRITE_REG(hw, IXGBE_TDLEN(txq->reg_idx),
+				txq->nb_tx_desc * sizeof(union ixgbe_adv_tx_desc)); /* desc数组的长度 */
+		/* Setup the HW Tx Head and TX Tail descriptor pointers */
+		IXGBE_WRITE_REG(hw, IXGBE_TDH(txq->reg_idx), 0); /* 写TDH为0 */
+		IXGBE_WRITE_REG(hw, IXGBE_TDT(txq->reg_idx), 0); /* 写TDT为0 */
+		...
+	}
+	...
+}
+
+int __attribute__((cold)) ixgbe_dev_rx_init(struct rte_eth_dev *dev)
+{
+	...
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		rxq = dev->data->rx_queues[i];
+		...
+		bus_addr = rxq->rx_ring_phys_addr; /* desc数组的总线地址 */
+		/* 将desc数组的总线地址写入网卡寄存器
+		 * RDBAL（RX Descriptor Base Address Low）
+		 * RDBAH（RX Descriptor Base Address High）
+		 * RDLEN（RX Descriptor Length）
+		 * RDH（RX Descriptor Head）
+		 * RDT（RX Descriptor Tail）
+		 * #define IXGBE_RDBAL(_i)	(((_i) < 64) ? (0x01000 + ((_i) * 0x40)) : \
+		 * 				(0x0D000 + (((_i) - 64) * 0x40)))
+		 * #define IXGBE_RDBAH(_i)	(((_i) < 64) ? (0x01004 + ((_i) * 0x40)) : \
+		 * 				(0x0D004 + (((_i) - 64) * 0x40)))
+		 * #define IXGBE_RDLEN(_i)	(((_i) < 64) ? (0x01008 + ((_i) * 0x40)) : \
+		 * 				(0x0D008 + (((_i) - 64) * 0x40)))
+		 * #define IXGBE_RDH(_i)	(((_i) < 64) ? (0x01010 + ((_i) * 0x40)) : \
+		 * 				(0x0D010 + (((_i) - 64) * 0x40)))
+		 * #define IXGBE_RDT(_i)	(((_i) < 64) ? (0x01018 + ((_i) * 0x40)) : \
+		 * 				(0x0D018 + (((_i) - 64) * 0x40))) */
+		IXGBE_WRITE_REG(hw, IXGBE_RDBAL(rxq->reg_idx),
+				(uint32_t)(bus_addr & 0x00000000ffffffffULL));
+		IXGBE_WRITE_REG(hw, IXGBE_RDBAH(rxq->reg_idx),
+				(uint32_t)(bus_addr >> 32));
+		IXGBE_WRITE_REG(hw, IXGBE_RDLEN(rxq->reg_idx),
+				rxq->nb_rx_desc * sizeof(union ixgbe_adv_rx_desc)); /* desc数组的长度 */
+		IXGBE_WRITE_REG(hw, IXGBE_RDH(rxq->reg_idx), 0); /* 写RDH为0 */
+		IXGBE_WRITE_REG(hw, IXGBE_RDT(rxq->reg_idx), 0); /* 写RDT为0 */
+		...
+	}
+	...
+}
+
+int __attribute__((cold)) ixgbe_dev_rxtx_start(struct rte_eth_dev *dev)
+{
+	...
+	for (i = 0; i < dev->data->nb_tx_queues; i++) {
+		...
+		ret = ixgbe_dev_tx_queue_start(dev, i);
+		...
+	}
+	...
+	for (i = 0; i < dev->data->nb_rx_queues; i++) {
+		...
+		ret = ixgbe_dev_rx_queue_start(dev, i);
+		...
+	}
+	...
+}
+
+int __attribute__((cold)) ixgbe_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
+{
+	...
+	/* 使能发送 */
+	txdctl = IXGBE_READ_REG(hw, IXGBE_TXDCTL(txq->reg_idx));
+	txdctl |= IXGBE_TXDCTL_ENABLE;
+	IXGBE_WRITE_REG(hw, IXGBE_TXDCTL(txq->reg_idx), txdctl);
+	...
+	/* 写TDH为0 */
+	IXGBE_WRITE_REG(hw, IXGBE_TDH(txq->reg_idx), 0);
+	/* 写TDT为0 */
+	IXGBE_WRITE_REG(hw, IXGBE_TDT(txq->reg_idx), 0);
+	/* 设置发送队列状态为RTE_ETH_QUEUE_STATE_STARTED */
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	...
+}
+
+int __attribute__((cold)) ixgbe_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+	...
+	/* 为每个接收队列分配mbuf */
+	if (ixgbe_alloc_rx_queue_mbufs(rxq) != 0) {
+	...
+	/* 使能接收 */
+	rxdctl = IXGBE_READ_REG(hw, IXGBE_RXDCTL(rxq->reg_idx));
+	rxdctl |= IXGBE_RXDCTL_ENABLE;
+	IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(rxq->reg_idx), rxdctl);
+	...
+	/* 写RDH为0 */
+	IXGBE_WRITE_REG(hw, IXGBE_RDH(rxq->reg_idx), 0);
+	/* 写RDT为rxq->nb_rx_desc - 1 */
+	IXGBE_WRITE_REG(hw, IXGBE_RDT(rxq->reg_idx), rxq->nb_rx_desc - 1);
+	/* 设置接收队列状态为RTE_ETH_QUEUE_STATE_STARTED */
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	...
+}
+
+static int __attribute__((cold)) ixgbe_alloc_rx_queue_mbufs(struct ixgbe_rx_queue *rxq)
+{
+	struct ixgbe_rx_entry *rxe = rxq->sw_ring;
+	uint64_t dma_addr;
+	unsigned int i;
+
+	/* Initialize software ring entries */
+	for (i = 0; i < rxq->nb_rx_desc; i++) {
+		volatile union ixgbe_adv_rx_desc *rxd;
+		struct rte_mbuf *mbuf = rte_mbuf_raw_alloc(rxq->mb_pool); /* 分配mbuf */
+
+		if (mbuf == NULL) {
+			PMD_INIT_LOG(ERR, "RX mbuf alloc failed queue_id=%u",
+				     (unsigned) rxq->queue_id);
+			return -ENOMEM;
+		}
+
+		mbuf->data_off = RTE_PKTMBUF_HEADROOM;
+		mbuf->port = rxq->port_id;
+
+		dma_addr =
+			rte_cpu_to_le_64(rte_mbuf_data_dma_addr_default(mbuf)); /* mbuf的总线地址 */
+		rxd = &rxq->rx_ring[i];
+		rxd->read.hdr_addr = 0;
+		rxd->read.pkt_addr = dma_addr; /* 总线地址赋给rxd->read.pkt_addr */
+		rxe[i].mbuf = mbuf; /* 将mbuf挂载到rxe */
+	}
+
+	return 0;
+}
